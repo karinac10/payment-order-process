@@ -1,0 +1,26 @@
+logging:
+  apiName: "payment-order-process"
+  layer: "Process API"
+
+https:
+  listener:
+    host: "0.0.0.0"
+    port: "8082"
+    timeout: "60000"
+    path: "/payment-order/*"
+
+# Until Successful
+untilSuccessful:
+  retries: "1"
+  delay: "2000"
+
+# Connection to the System API
+system:
+  core-transfers:
+    api:
+      protocol: "HTTPS"
+      host: "core-transfers-system-prod.cloudhub.io"
+      port: "443"
+      timeout: "240000"
+      basepath: "/api"
+      transferenciasPath: "/transferencias"

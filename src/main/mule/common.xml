@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!--
+        Global error handler — referenciar con <error-handler ref="global-error-handler"/> en cada flow.
+        HTTP:BAD_RESPONSE propaga el status y body del System API directamente al caller.
+    -->
+    <error-handler name="global-error-handler">
+
+        <on-error-propagate type="HTTP:CONNECTIVITY" logException="false" doc:name="503 System API no disponible">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  codigo:    "SERVICIO_NO_DISPONIBLE",
+  mensaje:   "El sistema de transferencias no está disponible. Intente más tarde.",
+  timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssZ"}
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">503</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="HTTP:TIMEOUT" logException="false" doc:name="504 Timeout">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  codigo:    "TIMEOUT",
+  mensaje:   "El sistema de transferencias no respondió a tiempo.",
+  timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssZ"}
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">504</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <!-- Propaga status code + body del System API sin transformar -->
+        <on-error-propagate type="HTTP:BAD_RESPONSE" logException="false" doc:name="Propaga error downstream">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">#[error.muleMessage.attributes.statusCode]</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="ANY" logException="true" doc:name="500 Error inesperado">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  codigo:    "ERROR_INTERNO",
+  mensaje:   "Ocurrió un error inesperado en la capa de proceso.",
+  timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssZ"}
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">500</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+    </error-handler>
+
+	<sub-flow name="global_apiEntryPoint" doc:id="a1b2c3d4-e5f6-7890-ab12-cd3456789001" >
+		<try doc:name="Validate Request Payload" doc:id="a1b2c3d4-e5f6-7890-ab12-cd3456789002" >
+			<ee:transform doc:name="Check Request Payload" doc:id="a1b2c3d4-e5f6-7890-ab12-cd3456789003" >
+				<ee:message >
+					<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+if (attributes.method == "GET" or isEmpty(attributes.method))
+    {}
+else
+    payload as Object]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<error-handler >
+				<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="a1b2c3d4-e5f6-7890-ab12-cd3456789004" type="MULE:EXPRESSION" >
+					<raise-error doc:name="Raise Validation BAD_REQUEST" doc:id="a1b2c3d4-e5f6-7890-ab12-cd3456789005" type="APP:INVALID_PAYLOAD" />
+				</on-error-propagate>
+			</error-handler>
+		</try>
+		<ee:transform doc:name="transactionId and incomingAttr" doc:id="a1b2c3d4-e5f6-7890-ab12-cd3456789006" >
+			<ee:message />
+			<ee:variables >
+				<ee:set-variable variableName="transactionId" ><![CDATA[%dw 2.0
+output application/java
+---
+attributes.headers."X-Idempotency-Key"]]></ee:set-variable>
+				<ee:set-variable variableName="incomingAttr" ><![CDATA[output application/json
+---
+message.attributes]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<ee:transform doc:name="flowVar" doc:id="a1b2c3d4-e5f6-7890-ab12-cd3456789007" >
+			<ee:message />
+			<ee:variables >
+				<ee:set-variable variableName="flowVar" ><![CDATA[%dw 2.0
+output application/json
+---
+vars.incomingAttr.requestUri]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+	</sub-flow>
+
+    <sub-flow name="log-request-sf">
+        <logger level="INFO"
+            message="#['[' ++ correlationId ++ '] REQUEST ' ++ (attributes.method default '') ++ ' ' ++ (attributes.requestPath default '')]"
+            doc:name="Log Request"/>
+    </sub-flow>
+
+    <sub-flow name="log-response-sf">
+        <logger level="INFO"
+            message="#['[' ++ correlationId ++ '] RESPONSE status=' ++ ((vars.httpStatus default 200) as String)]"
+            doc:name="Log Response"/>
+    </sub-flow>
+
+</mule>
