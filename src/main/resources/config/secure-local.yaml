@@ -2,6 +2,10 @@ logging:
   apiName: "payment-order-process"
   layer: "Process API"
 
+objectstore:
+  paymentOrder:
+    ttl: "86400"
+
 https:
   listener:
     host: "0.0.0.0"

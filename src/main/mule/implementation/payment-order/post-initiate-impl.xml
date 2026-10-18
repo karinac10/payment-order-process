@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!--
+        POST /PaymentOrder/Initiate — Process API
+        Responsabilidad:
+          1. Idempotencia: misma llave + mismo cuerpo → replay; misma llave + otro cuerpo → 409
+          2. Generar UUID de la orden (orderId)
+          3. Mapear BIAN (de Experience) → JSON plano (para System API)
+          4. Llamar a System API POST /transferencias — acepta 200 (00/51/62)
+          5. Interpretar codigoCore: 00 → Completed, 51 → Rejected/SALDO_INSUFICIENTE, 62 → Rejected/CUENTA_BLOQUEADA
+          6. Guardar orden en Object Store (key=orderId) y registro de idempotencia (key=transactionId)
+          7. Retornar orden con estado y referencia a Experience API
+
+        System API devuelve 200 para 00/51/62; 503 para 91/timeout/connectivity; 502 para ilegible.
+        Process interpreta los 200 del System; los 503 y 502 se propagan hacia Experience via HTTP:BAD_RESPONSE.
+    -->
+
+    <sub-flow name="post-payment-order-initiate-impl-sf" doc:id="a1b2c3d4-e5f6-7890-aa11-112345678401">
+
+        <logger level="INFO"
+        doc:name="BEFORE"
+        doc:id="52f1f42e-1824-4d2e-9197-138946255a2a"
+        message="#[
+            %dw 2.0
+            output text/plain
+            ---
+            '[post-initiate] START - transactionId=' ++
+            ((vars.transactionId default '') as String) ++
+            ' | correlationId=' ++
+            ((correlationId default '') as String)
+        ]"/>
+
+        <!-- 1. Preservar payload BIAN antes de cualquier operación -->
+        <set-variable variableName="bianRequest" value="#[payload]"
+            doc:name="Store BIAN request"
+            doc:id="c1000001-0001-0001-0001-000000000001"/>
+
+        <!-- 2. Compute SHA1 hash del cuerpo para comparación de idempotencia -->
+        <ee:transform doc:name="Compute body SHA1 hash" doc:id="c1000002-0002-0002-0002-000000000002">
+            <ee:variables>
+                <ee:set-variable variableName="bodyHash"><![CDATA[%dw 2.0
+output application/java
+import SHA1 from dw::Crypto
+---
+SHA1((payload write "application/json") as Binary)]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <!-- 3. Verificar si la llave de idempotencia ya fue procesada -->
+        <os:contains key="#[vars.idempotencyKey]" objectStore="payment-orders-store"
+            target="idempotencyExists"
+            doc:name="Check idempotency key"
+            doc:id="c1000003-0003-0003-0003-000000000003"/>
+
+        <choice doc:name="Idempotency gate" doc:id="c1000004-0004-0004-0004-000000000004">
+
+            <when expression="#[vars.idempotencyExists == true]">
+                <!-- Llave ya usada: comparar hash -->
+                <os:retrieve key="#[vars.idempotencyKey]" objectStore="payment-orders-store"
+                    target="cachedEntry"
+                    doc:name="Retrieve idempotency entry"
+                    doc:id="c1000005-0005-0005-0005-000000000005"/>
+
+                <choice doc:name="Same body hash?" doc:id="c1000006-0006-0006-0006-000000000006">
+                    <when expression="#[vars.cachedEntry.bodyHash == vars.bodyHash]">
+                        <!-- Misma llave + mismo cuerpo → replay con headers BIAN -->
+                        <ee:transform doc:name="Replay cached response" doc:id="c1000007-0007-0007-0007-000000000007">
+                            <ee:message>
+                                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+vars.cachedEntry.response]]></ee:set-payload>
+                            </ee:message>
+                            <ee:variables>
+                                <ee:set-variable variableName="httpStatus">200</ee:set-variable>
+                                <ee:set-variable variableName="outboundHeaders"><![CDATA[%dw 2.0
+output application/java
+---
+{
+    'X-Payment-Order-Id': vars.cachedEntry.orderId,
+    'Location': '/payment-order/PaymentOrder/' ++ vars.cachedEntry.orderId ++ '/Retrieve',
+    'X-Idempotent-Replayed': 'true'
+}]]></ee:set-variable>
+                            </ee:variables>
+                        </ee:transform>
+                        <logger level="INFO"
+        doc:name="Idempotency replay"
+        doc:id="47ce71eb-d2fa-41b1-badd-7a101d9aed82"
+        message="#[
+            %dw 2.0
+            output text/plain
+            ---
+            '[post-initiate] REPLAY | transactionId=' ++
+            ((vars.transactionId default '') as String) ++
+            ' | orderId=' ++
+            ((vars.cachedEntry.orderId default 'N/A') as String)
+        ]"/>
+                    </when>
+                    <otherwise>
+                        <!-- Misma llave + cuerpo diferente → 409 -->
+                        <raise-error type="APP:IDEMPOTENCY_CONFLICT"
+                            doc:name="Raise: idempotency conflict"
+                            doc:id="c1000009-0009-0009-0009-000000000009"/>
+                    </otherwise>
+                </choice>
+            </when>
+
+            <otherwise>
+                <!-- Nueva solicitud: procesar -->
+
+                <!-- 4. Generar UUID de la orden -->
+                <set-variable variableName="orderId"
+                    value="#[uuid()]"
+                    doc:name="Generate orderId (UUID)"
+                    doc:id="c1000010-0010-0010-0010-000000000010"/>
+
+                <!-- 5. Mapear BIAN → JSON plano para System API -->
+                <ee:transform doc:name="Map BIAN → System API JSON" doc:id="c1000011-0011-0011-0011-000000000011">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var r = vars.bianRequest
+---
+{
+  cuentaOrigen:   r.PayerProductInstanceReference.ProductReference.ProductIdentification.ProductIdentification.IdentifierValue.Value,
+  cuentaDestino:  r.PayeeProductInstanceReference.ProductReference.ProductIdentification.ProductIdentification.IdentifierValue.Value,
+  codigoBanco:    r.PayeeBankReference.PartyReference.PartyIdentification.PartyIdentification.IdentifierValue.Value,
+  monto:          r.Amount.AmountValue.Value as String,
+  moneda:         r.Amount.AmountCurrency.Currencycode default "USD",
+  glosa:          r.RemittanceInformation.Text,
+  fechaSolicitud: r.Date.DateTimeContent
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+
+                <!-- 6. Llamar a System API POST /transferencias (acepta 200: 00/51/62) -->
+                <try doc:name="Try" doc:id="3cc258fb-8b71-46c7-b7a2-e8bdaae7f0ec" >
+					<http:request method="POST" config-ref="core-transfers-system-request-config" path="${secure::system.core-transfers.api.transferenciasPath}" doc:name="POST System API /transferencias" doc:id="c1000012-0012-0012-0012-000000000012" sendCorrelationId="ALWAYS" correlationId="#[vars.transactionId]">
+                    <http:headers><![CDATA[#[{
+    'X-Idempotency-Key': vars.idempotencyKey default '',
+    'x-correlation-id':  vars.transactionId default '',
+    'Content-Type':      'application/json'
+}]]]></http:headers>
+                    <http:response-validator>
+                        <http:success-status-code-validator values="200" />
+                    </http:response-validator>
+                </http:request>
+					<error-handler >
+						<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="a819f745-2fdc-4744-82e9-a4b1b1f40ad1" type="HTTP:CONNECTIVITY, HTTP:INTERNAL_SERVER_ERROR">
+						</on-error-propagate>
+					</error-handler>
+				</try>
+
+                <!-- 7. Construir respuesta BIAN PaymentOrderProcedure con PaymentInstructionStatus -->
+                <ee:transform doc:name="Build BIAN response from core result" doc:id="c1000013-0013-0013-0013-000000000013">
+                    <ee:variables>
+                        <ee:set-variable variableName="order"><![CDATA[%dw 2.0
+output application/java
+var r           = vars.bianRequest
+var codigoCore  = payload.codigoCore default "00"
+var isCompleted = codigoCore == "00"
+---
+{
+  PayerProductInstanceReference: r.PayerProductInstanceReference,
+  PayeeProductInstanceReference: r.PayeeProductInstanceReference,
+  PayeeBankReference:            r.PayeeBankReference,
+  Amount:                        r.Amount,
+  Currency:                      r.Currency,
+  DateType:                      r.DateType,
+  Date:                          r.Date,
+  PaymentMechanismType:          r.PaymentMechanismType,
+  PaymentInstructions: {
+    PaymentInstructionType: "Domesticpayment",
+    PaymentInstructionStatus: {
+      PaymentInstructionStatusType: if (isCompleted) "Completed" else "Rejected",
+      PaymentInstructionStatus: {
+        (StatusReason: { Text: if (codigoCore == "51") "INSUFFICIENT_FUNDS" else "ACCOUNT_BLOCKED" }) if (!isCompleted),
+        StatusDateTime: { DateTimeContent: payload.fechaProcesamiento }
+      }
+    }
+  },
+  RemittanceInformation: r.RemittanceInformation
+}]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+
+                <!-- 8. Guardar orden en OS (key=orderId) para Retrieve -->
+                <os:store key="#[vars.orderId]" failIfPresent="false"
+                    objectStore="payment-orders-store"
+                    doc:name="Store order (key=orderId)"
+                    doc:id="c1000014-0014-0014-0014-000000000014">
+                    <os:value>#[vars.order]</os:value>
+                </os:store>
+
+                <!-- 9. Guardar registro de idempotencia (key=idempotencyKey) -->
+                <os:store key="#[vars.idempotencyKey]" failIfPresent="false"
+                    objectStore="payment-orders-store"
+                    doc:name="Store idempotency entry (key=idempotencyKey)"
+                    doc:id="c1000015-0015-0015-0015-000000000015">
+                    <os:value>#[{bodyHash: vars.bodyHash, response: vars.order, orderId: vars.orderId}]</os:value>
+                </os:store>
+
+                <!-- 10. Devolver orden BIAN + headers X-Payment-Order-Id y Location -->
+                <ee:transform doc:name="Set BIAN response + httpStatus 200 + headers" doc:id="c1000016-0016-0016-0016-000000000016">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+vars.order]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">200</ee:set-variable>
+                        <ee:set-variable variableName="outboundHeaders"><![CDATA[%dw 2.0
+output application/java
+---
+{
+    'X-Payment-Order-Id': vars.orderId,
+    'Location': '/payment-order/PaymentOrder/' ++ vars.orderId ++ '/Retrieve'
+}]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+
+            
+</otherwise>
+        </choice>
+
+       <logger level="INFO"
+        doc:name="AFTER"
+        doc:id="92948b02-21b2-4689-bf3b-4b1cf2a2e1c0"
+        message="#[
+            %dw 2.0
+            output text/plain
+            ---
+            '[post-initiate] END - transactionId=' ++
+            ((vars.transactionId default '') as String) ++
+            ' | orderId=' ++
+            ((vars.orderId default 'N/A') as String) ++
+            ' | httpStatus=' ++
+            ((vars.httpStatus default 200) as String)
+        ]"/>
+
+    </sub-flow>
+
+</mule>

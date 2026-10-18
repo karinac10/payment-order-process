@@ -21,7 +21,8 @@ output application/json
 {
   codigo:    "SERVICIO_NO_DISPONIBLE",
   mensaje:   "El sistema de transferencias no está disponible. Intente más tarde.",
-  timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssZ"}
+  correlationId: vars.transactionId default "",
+  timestamp:     now() as String {format: "yyyy-MM-dd'T'HH:mm:ssXXX"}
 }]]></ee:set-payload>
                 </ee:message>
                 <ee:variables>
@@ -39,7 +40,8 @@ output application/json
 {
   codigo:    "TIMEOUT",
   mensaje:   "El sistema de transferencias no respondió a tiempo.",
-  timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssZ"}
+  correlationId: vars.transactionId default "",
+  timestamp:     now() as String {format: "yyyy-MM-dd'T'HH:mm:ssXXX"}
 }]]></ee:set-payload>
                 </ee:message>
                 <ee:variables>
@@ -48,22 +50,47 @@ output application/json
             </ee:transform>
         </on-error-propagate>
 
-        <!-- Propaga status code + body del System API sin transformar -->
-        <on-error-propagate type="HTTP:BAD_RESPONSE" logException="false" doc:name="Propaga error downstream">
+        <on-error-propagate type="APP:IDEMPOTENCY_CONFLICT" logException="false" doc:name="409 Conflicto de idempotencia">
             <ee:transform>
                 <ee:message>
                     <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-payload]]></ee:set-payload>
+{
+  codigo:    "IDEMPOTENCY_CONFLICT",
+  mensaje:   "La clave X-Idempotency-Key ya fue utilizada con un cuerpo de solicitud diferente.",
+  correlationId: vars.transactionId default "",
+  timestamp:     now() as String {format: "yyyy-MM-dd'T'HH:mm:ssXXX"}
+}]]></ee:set-payload>
                 </ee:message>
                 <ee:variables>
-                    <ee:set-variable variableName="httpStatus">#[error.muleMessage.attributes.statusCode]</ee:set-variable>
+                    <ee:set-variable variableName="httpStatus">409</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="APP:ORDER_NOT_FOUND" logException="false" doc:name="404 Orden no encontrada">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  codigo:    "ORDER_NOT_FOUND",
+  mensaje:   "La orden de pago no fue encontrada.",
+  correlationId: vars.transactionId default "",
+  timestamp:     now() as String {format: "yyyy-MM-dd'T'HH:mm:ssXXX"}
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">404</ee:set-variable>
                 </ee:variables>
             </ee:transform>
         </on-error-propagate>
 
         <on-error-propagate type="ANY" logException="true" doc:name="500 Error inesperado">
+            <logger level="ERROR" doc:name="Log error"
+    message="#[%dw 2.0&#10;        output text/plain&#10;        ---&#10;        '[ERROR] flujo: ' ++&#10;        ((vars.flowVar default 'N/A') as String) ++&#10;        ' | transactionId: ' ++&#10;        ((vars.transactionId default 'N/A') as String) ++&#10;        ' | ' ++&#10;        ((error.description default 'Error al procesar la solicitud de transferencia.') as String)]"/>
             <ee:transform>
                 <ee:message>
                     <ee:set-payload><![CDATA[%dw 2.0
@@ -71,12 +98,13 @@ output application/json
 ---
 {
   codigo:    "ERROR_INTERNO",
-  mensaje:   "Ocurrió un error inesperado en la capa de proceso.",
-  timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssZ"}
+  mensaje:   "Ocurrió un error inesperado. El servicio de transferencias no pudo completar la solicitud.",
+  correlationId: vars.transactionId default "",
+  timestamp:     now() as String {format: "yyyy-MM-dd'T'HH:mm:ssXXX"}
 }]]></ee:set-payload>
                 </ee:message>
                 <ee:variables>
-                    <ee:set-variable variableName="httpStatus">500</ee:set-variable>
+                    <ee:set-variable variableName="httpStatus"><![CDATA[500]]></ee:set-variable>
                 </ee:variables>
             </ee:transform>
         </on-error-propagate>
@@ -102,14 +130,23 @@ else
 				</on-error-propagate>
 			</error-handler>
 		</try>
-		<ee:transform doc:name="transactionId and incomingAttr" doc:id="a1b2c3d4-e5f6-7890-ab12-cd3456789006" >
+		<ee:transform doc:name="transactionId, startTime, idempotencyKey and incomingAttr" doc:id="a1b2c3d4-e5f6-7890-ab12-cd3456789006" >
 			<ee:message />
 			<ee:variables >
 				<ee:set-variable variableName="transactionId" ><![CDATA[%dw 2.0
 output application/java
 ---
+attributes.headers."x-correlation-id" default uuid()]]></ee:set-variable>
+				<ee:set-variable variableName="startTime" ><![CDATA[%dw 2.0
+output application/java
+---
+now() as Number {unit: "milliseconds"}]]></ee:set-variable>
+				<ee:set-variable variableName="idempotencyKey" ><![CDATA[%dw 2.0
+output application/java
+---
 attributes.headers."X-Idempotency-Key"]]></ee:set-variable>
-				<ee:set-variable variableName="incomingAttr" ><![CDATA[output application/json
+				<ee:set-variable variableName="incomingAttr" ><![CDATA[%dw 2.0
+output application/json
 ---
 message.attributes]]></ee:set-variable>
 			</ee:variables>

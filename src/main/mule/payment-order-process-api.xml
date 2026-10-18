@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mule xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd ">
     <http:listener-config name="payment-order-process-api-httpListenerConfig">
-        <http:listener-connection host="${https.listener.host}" port="${https.listener.port}" />
+        <http:listener-connection host="${secure::https.listener.host}" port="${secure::https.listener.port}" />
     </http:listener-config>
     <apikit:config name="payment-order-process-api-config" api="resource::c9dbcdc8-e2b1-421f-aeb3-ddbe856d4e2f:payment-order-process-api:1.0.0:raml:zip:payment-order-process-api.raml" outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus" />
     <flow name="payment-order-process-api-main">
-        <http:listener config-ref="payment-order-process-api-httpListenerConfig" path="/payment-order/*">
+        <http:listener config-ref="payment-order-process-api-httpListenerConfig" path="${secure::https.listener.path}">
             <http:response statusCode="#[vars.httpStatus default 200]">
                 <http:headers><![CDATA[#[vars.outboundHeaders default {}]]]></http:headers>
             </http:response>
@@ -18,249 +18,182 @@
         <apikit:router config-ref="payment-order-process-api-config" />
         <error-handler>
             <on-error-propagate type="APIKIT:BAD_REQUEST">
-                <ee:transform doc:name="Transform Message">
+                <ee:transform doc:name="400 Bad Request">
                     <ee:message>
                         <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{message: "Bad request"}]]></ee:set-payload>
+{
+    status_code: "400",
+    status: error.errorType.identifier,
+    message: "La solicitud contiene datos inválidos.",
+    codigo: "VALIDACION_ERROR",
+    detalle: error.detailedDescription default "Revise los campos enviados.",
+    correlationId: vars.transactionId default "",
+    timestamp: now() as String {
+        format: "yyyy-MM-dd'T'HH:mm:ssXXX"
+    }
+}]]></ee:set-payload>
                     </ee:message>
                     <ee:variables>
-                        <ee:set-variable variableName="httpStatus">400</ee:set-variable>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[400]]></ee:set-variable>
                     </ee:variables>
                 </ee:transform>
             </on-error-propagate>
             <on-error-propagate type="APIKIT:NOT_FOUND">
-                <ee:transform doc:name="Transform Message">
+                <ee:transform doc:name="404 Not Found">
                     <ee:message>
                         <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{message: "Resource not found"}]]></ee:set-payload>
+{
+    status_code: "404",
+    status: error.errorType.identifier,
+    message: "La ruta solicitada no existe.",
+    codigo: "VALIDACION_ERROR",
+    detalle: error.detailedDescription default "No fue posible obtener el recurso solicitado.",
+    correlationId: vars.transactionId default "",
+    timestamp: now() as String {
+        format: "yyyy-MM-dd'T'HH:mm:ssXXX"
+    }
+}]]></ee:set-payload>
                     </ee:message>
                     <ee:variables>
-                        <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[404]]></ee:set-variable>
                     </ee:variables>
                 </ee:transform>
             </on-error-propagate>
             <on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED">
-                <ee:transform doc:name="Transform Message">
+                <ee:transform doc:name="405 Method Not Allowed">
                     <ee:message>
                         <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{message: "Method not allowed"}]]></ee:set-payload>
+{
+    status_code: "405",
+    status: error.errorType.identifier,
+    message: "El método no está permitido para este recurso.",
+    codigo: "VALIDACION_ERROR",
+    detalle: error.detailedDescription default "No fue posible completar la operación.",
+    correlationId: vars.transactionId default "",
+    timestamp: now() as String {
+        format: "yyyy-MM-dd'T'HH:mm:ssXXX"
+    }
+}]]></ee:set-payload>
                     </ee:message>
                     <ee:variables>
-                        <ee:set-variable variableName="httpStatus">405</ee:set-variable>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[405]]></ee:set-variable>
                     </ee:variables>
                 </ee:transform>
             </on-error-propagate>
             <on-error-propagate type="APIKIT:NOT_ACCEPTABLE">
-                <ee:transform doc:name="Transform Message">
+                <ee:transform doc:name="406 Not Acceptable">
                     <ee:message>
                         <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{message: "Not acceptable"}]]></ee:set-payload>
+{
+    status_code: "406",
+    status: error.errorType.identifier,
+    message: "El formato de respuesta solicitado no es aceptable.",
+    codigo: "VALIDACION_ERROR",
+    detalle: error.detailedDescription default "No fue posible completar la operación.",
+    correlationId: vars.transactionId default "",
+    timestamp: now() as String {
+        format: "yyyy-MM-dd'T'HH:mm:ssXXX"
+    }
+}]]></ee:set-payload>
                     </ee:message>
                     <ee:variables>
-                        <ee:set-variable variableName="httpStatus">406</ee:set-variable>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[406]]></ee:set-variable>
                     </ee:variables>
                 </ee:transform>
             </on-error-propagate>
             <on-error-propagate type="APIKIT:UNSUPPORTED_MEDIA_TYPE">
-                <ee:transform doc:name="Transform Message">
+                <ee:transform doc:name="415 Unsupported Media Type">
                     <ee:message>
                         <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{message: "Unsupported media type"}]]></ee:set-payload>
+{
+    status_code: "415",
+    status: error.errorType.identifier,
+    message: "El tipo de media del cuerpo no es soportado.",
+    codigo: "VALIDACION_ERROR",
+    detalle: error.detailedDescription default "No fue posible completar la operación.",
+    correlationId: vars.transactionId default "",
+    timestamp: now() as String {
+        format: "yyyy-MM-dd'T'HH:mm:ssXXX"
+    }
+}
+]]></ee:set-payload>
                     </ee:message>
                     <ee:variables>
-                        <ee:set-variable variableName="httpStatus">415</ee:set-variable>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[415]]></ee:set-variable>
                     </ee:variables>
                 </ee:transform>
             </on-error-propagate>
             <on-error-propagate type="APIKIT:NOT_IMPLEMENTED">
-                <ee:transform doc:name="Transform Message">
+                <ee:transform doc:name="501 Not Implemented">
                     <ee:message>
                         <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{message: "Not Implemented"}]]></ee:set-payload>
+{
+    status_code: "501",
+    status: error.errorType.identifier,
+    message: "La operación no está implementada.",
+    codigo: "VALIDACION_ERROR",
+    detalle: error.detailedDescription default "No fue posible completar la solicitud. Operación no implementada.",
+    correlationId: vars.transactionId default "",
+    timestamp: now() as String {
+        format: "yyyy-MM-dd'T'HH:mm:ssXXX"
+    }
+}
+]]></ee:set-payload>
                     </ee:message>
                     <ee:variables>
-                        <ee:set-variable variableName="httpStatus">501</ee:set-variable>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[501]]></ee:set-variable>
                     </ee:variables>
                 </ee:transform>
             </on-error-propagate>
             <on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="d4e5f6a7-b8c9-0123-de45-f06789012333" type="APP:INVALID_PAYLOAD">
-                <ee:transform doc:name="Build Invalid Payload Response" doc:id="e5f6a7b8-c9d0-1234-ef56-012345678444">
+                <ee:transform doc:name="400 Invalid Payload" doc:id="e5f6a7b8-c9d0-1234-ef56-012345678444">
                     <ee:message>
                         <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{message: "The JSON payload is malformed."}]]></ee:set-payload>
+{
+    status_code: "400",
+    status: "VALIDACION_ERROR",
+    message: "El cuerpo de la solicitud no es un JSON válido.",
+    correlationId: vars.transactionId default "",
+    timestamp: now() as String {
+        format: "yyyy-MM-dd'T'HH:mm:ssXXX"
+    }
+}]]></ee:set-payload>
                     </ee:message>
                     <ee:variables>
-                        <ee:set-variable variableName="httpStatus">400</ee:set-variable>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[400]]></ee:set-variable>
                     </ee:variables>
                 </ee:transform>
             </on-error-propagate>
         </error-handler>
     </flow>
     <flow name="get:\PaymentOrder\(paymentorderid)\Retrieve:payment-order-process-api-config">
-        <ee:transform doc:name="Transform Message">
-            <ee:variables>
-                <ee:set-variable variableName="paymentorderid">attributes.uriParams.'paymentorderid'</ee:set-variable>
-            </ee:variables>
-        </ee:transform>
-        <ee:transform doc:name="Transform Message">
-            <ee:message>
-                <ee:set-payload><![CDATA[%dw 2.0
-output application/json
----
-{
-  PayerProductInstanceReference: {
-    ProductReference: {
-      ProductIdentification: {
-        ProductIdentification: {
-          IdentifierValue: {
-            Value: "100200300"
-          }
-        }
-      }
-    }
-  },
-  PayeeProductInstanceReference: {
-    ProductReference: {
-      ProductIdentification: {
-        ProductIdentification: {
-          IdentifierValue: {
-            Value: "900800700"
-          }
-        }
-      }
-    }
-  },
-  PayeeBankReference: {
-    PartyReference: {
-      PartyIdentification: {
-        PartyIdentification: {
-          IdentifierValue: {
-            Value: "BIZ-0042"
-          }
-        }
-      }
-    }
-  },
-  Amount: {
-    AmountValue: {
-      Value: "150.75"
-    },
-    AmountCurrency: {
-      Currencycode: "USD"
-    }
-  },
-  Currency: {
-    Currencycode: "USD"
-  },
-  DateType: "Creationdate",
-  Date: {
-    DateTimeContent: "2026-10-01T14:32:10-06:00"
-  },
-  PaymentMechanismType: "ACH",
-  PaymentInstructions: {
-    PaymentInstructionType: "Domesticpayment",
-    PaymentInstructionStatus: {
-      PaymentInstructionStatusType: "Completed",
-      PaymentInstructionStatus: {
-        StatusDateTime: {
-          DateTimeContent: "2026-10-01T14:32:11-06:00"
-        }
-      }
-    }
-  },
-  RemittanceInformation: {
-    Text: "Pago de alquiler"
-  }
-} as Object {encoding: "UTF-8", mediaType: "application/json"}]]></ee:set-payload>
-            </ee:message>
-        </ee:transform>
+        <logger level="INFO" doc:name="START" doc:id="c1d2e3f4-a5b6-7890-cc11-223456789121"
+            message="START: Inicialización del flujo: #[vars.flowVar] para #[app.name] con transactionId:  #[vars.transactionId]"/>
+        <flow-ref doc:name="get-payment-order-retrieve-impl-sf" doc:id="d2e3f4a5-b6c7-8901-dd22-334567890122" name="get-payment-order-retrieve-impl-sf"/>
+        <logger level="INFO" doc:name="END" doc:id="e3f4a5b6-c7d8-9012-ee33-445678901123"
+            message="END: Finalización del flujo: #[vars.flowVar] para #[app.name] con transactionId: #[vars.transactionId]"/>
+        <error-handler ref="global-error-handler"/>
     </flow>
     <flow name="post:\PaymentOrder\Initiate:application\json:payment-order-process-api-config">
-        <ee:transform doc:name="Transform Message">
-            <ee:message>
-                <ee:set-payload><![CDATA[%dw 2.0
-output application/json
----
-{
-  PayerProductInstanceReference: {
-    ProductReference: {
-      ProductIdentification: {
-        ProductIdentification: {
-          IdentifierValue: {
-            Value: "100200300"
-          }
-        }
-      }
-    }
-  },
-  PayeeProductInstanceReference: {
-    ProductReference: {
-      ProductIdentification: {
-        ProductIdentification: {
-          IdentifierValue: {
-            Value: "900800700"
-          }
-        }
-      }
-    }
-  },
-  PayeeBankReference: {
-    PartyReference: {
-      PartyIdentification: {
-        PartyIdentification: {
-          IdentifierValue: {
-            Value: "BIZ-0042"
-          }
-        }
-      }
-    }
-  },
-  Amount: {
-    AmountValue: {
-      Value: "150.75"
-    },
-    AmountCurrency: {
-      Currencycode: "USD"
-    }
-  },
-  Currency: {
-    Currencycode: "USD"
-  },
-  DateType: "Creationdate",
-  Date: {
-    DateTimeContent: "2026-10-01T14:32:10-06:00"
-  },
-  PaymentMechanismType: "ACH",
-  PaymentInstructions: {
-    PaymentInstructionType: "Domesticpayment",
-    PaymentInstructionStatus: {
-      PaymentInstructionStatusType: "Completed",
-      PaymentInstructionStatus: {
-        StatusDateTime: {
-          DateTimeContent: "2026-10-01T14:32:11-06:00"
-        }
-      }
-    }
-  },
-  RemittanceInformation: {
-    Text: "Pago de alquiler"
-  }
-} as Object {encoding: "UTF-8", mediaType: "application/json"}]]></ee:set-payload>
-            </ee:message>
-        </ee:transform>
+        <logger level="INFO" doc:name="START" doc:id="f4a5b6c7-d8e9-0123-ff44-556789012124"
+            message="START: Inicialización del flujo: #[vars.flowVar] para #[app.name] con transactionId:  #[vars.transactionId]"/>
+        <flow-ref doc:name="post-payment-order-initiate-impl-sf" doc:id="a5b6c7d8-e9f0-1234-aa55-667890123125" name="post-payment-order-initiate-impl-sf"/>
+        <logger level="INFO" doc:name="END" doc:id="b6c7d8e9-f0a1-2345-bb66-778901234126"
+            message="END: Finalización del flujo: #[vars.flowVar] para #[app.name] con transactionId: #[vars.transactionId]"/>
+        <error-handler ref="global-error-handler"/>
     </flow>
 </mule>

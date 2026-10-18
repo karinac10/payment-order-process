@@ -2,32 +2,39 @@
 <mule xmlns:api-gateway="http://www.mulesoft.org/schema/mule/api-gateway"
       xmlns="http://www.mulesoft.org/schema/mule/core"
       xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
       xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
       xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
         http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
         http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd
 http://www.mulesoft.org/schema/mule/api-gateway http://www.mulesoft.org/schema/mule/api-gateway/current/mule-api-gateway.xsd">
     <secure-properties:config
         name="Secure_Properties_Config"
-        key="${secure.key}"
-        file="config/secure-${env}.yaml"
+        key="${mule.key}"
+        file="config/secure-${mule.env}.yaml"
         doc:name="Secure Properties Config">
-        <secure-properties:encrypt algorithm="AES" mode="CBC"/>
     </secure-properties:config>
 
     <!-- HTTP Request → Core Transfers System API -->
     <http:request-config
         name="core-transfers-system-request-config"
-        basePath="${system.core-transfers.api.basepath}"
+        basePath="${secure::system.core-transfers.api.basepath}"
         doc:name="Core Transfers System Request Config"
-        responseTimeout="${system.core-transfers.api.timeout}">
+        sendCorrelationId="ALWAYS"
+        responseTimeout="${secure::system.core-transfers.api.timeout}">
         <http:request-connection
-            host="${system.core-transfers.api.host}"
-            port="${system.core-transfers.api.port}"
-            protocol="${system.core-transfers.api.protocol}"/>
+            host="${secure::system.core-transfers.api.host}"
+            port="${secure::system.core-transfers.api.port}"
+            protocol="${secure::system.core-transfers.api.protocol}"/>
     </http:request-config>
-    <api-gateway:autodiscovery apiId="${secure::api.id}" ignoreBasePath="true" doc:name="API Autodiscovery" doc:id="7b9c2d1e-3f4a-4b5c-6d7e-8f9a0b1c2d3e" flowRef="payment-order-process-api-main"/>
 
+    <!-- Object Store para idempotencia (key=X-Idempotency-Key) y lookup de órdenes (key=orderId) -->
+    <os:object-store name="payment-orders-store"
+        doc:name="Payment Orders Object Store"
+        entryTtl="${secure::objectstore.paymentOrder.ttl}"
+        entryTtlUnit="SECONDS"
+        persistent="true"/>
 
 </mule>
