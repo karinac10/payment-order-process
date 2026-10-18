@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!--
+        GET /PaymentOrder/{paymentorderid}/Retrieve — Process API
+        Responsabilidad: leer la orden del Object Store y devolverla.
+        Si no existe → 404 APP:ORDER_NOT_FOUND (Experience lo mapea a TRANSFERENCIA_NO_ENCONTRADA).
+    -->
+
+    <sub-flow name="get-payment-order-retrieve-impl-sf" doc:id="c2d3e4f5-a6b7-8901-cc22-334567890501">
+
+        <logger level="INFO"
+        doc:name="BEFORE"
+        doc:id="c01de202-a0e1-4ba8-8f48-8ca622a3b61b"
+        message="#[
+            %dw 2.0
+            output text/plain
+            ---
+            '[get-retrieve] START - paymentorderid=' ++
+            ((attributes.uriParams.paymentorderid default 'N/A') as String)
+        ]"/>
+
+        <set-variable variableName="paymentorderid"
+            value="#[attributes.uriParams.paymentorderid]"
+            doc:name="Set paymentorderid"
+            doc:id="e4f5a6b7-c8d9-0123-ee44-556789012503"/>
+
+        <!-- Check Object Store for the order -->
+        <os:contains key="#[vars.paymentorderid]" objectStore="payment-orders-store"
+            target="orderFound"
+            doc:name="Check order in OS"
+            doc:id="d1000001-0001-0001-0001-000000000001"/>
+
+        <choice doc:name="Order in OS?" doc:id="d1000002-0002-0002-0002-000000000002">
+            <when expression="#[vars.orderFound == true]">
+                <os:retrieve key="#[vars.paymentorderid]" objectStore="payment-orders-store"
+                    target="orderRecord"
+                    doc:name="Retrieve order from OS"
+                    doc:id="d1000003-0003-0003-0003-000000000003"/>
+                <ee:transform doc:name="Set order payload + httpStatus 200" doc:id="d1000004-0004-0004-0004-000000000004">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+vars.orderRecord]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">200</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+            <otherwise>
+                <raise-error type="APP:ORDER_NOT_FOUND"
+                    doc:name="Raise: order not found"
+                    doc:id="d1000005-0005-0005-0005-000000000005"/>
+            </otherwise>
+        </choice>
+
+        <logger level="INFO"
+        doc:name="AFTER"
+        doc:id="fcea09a0-d727-4ef8-9243-1bf41a4d28f3"
+        message="#[
+            %dw 2.0
+            output text/plain
+            ---
+            '[get-retrieve] END - paymentorderid=' ++
+            ((vars.paymentorderid default 'N/A') as String) ++
+            ' | httpStatus=' ++
+            ((vars.httpStatus default 200) as String)
+        ]"/>
+
+    </sub-flow>
+
+</mule>
